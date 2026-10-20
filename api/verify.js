@@ -1,5 +1,38 @@
 import crypto from 'node:crypto';
 
+const PRIVATE_KEY_B64 = process.env.LICENSE_PRIVATE_KEY || '';
+const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+function chargerClePrivee() {
+  if (!PRIVATE_KEY_B64) return null;
+  try {
+    const raw = Buffer.from(PRIVATE_KEY_B64, 'base64');
+    const der = Buffer.concat([PKCS8_PREFIX, raw]);
+    return crypto.createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
+  } catch (e) {
+    console.error('[SIGN] Erreur cle:', e.message);
+    return null;
+  }
+}
+
+function signerReponse(obj) {
+  const privateKey = chargerClePrivee();
+  if (!privateKey) return null;
+  try {
+    const payload = { ...obj };
+    delete payload.signature;
+    delete payload.server_time;
+    const sortedKeys = Object.keys(payload).sort();
+    const sortedObj = {};
+    for (const k of sortedKeys) sortedObj[k] = payload[k];
+    const message = Buffer.from(JSON.stringify(sortedObj), 'utf-8');
+    return crypto.sign(null, message, privateKey).toString('base64');
+  } catch (e) {
+    console.error('[SIGN] Erreur signature:', e.message);
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -75,14 +108,17 @@ export default async function handler(req, res) {
 
         const mode = matchByHash ? 'hash' : 'clear_legacy';
         logAttempt(ip, key, true, `ok_${mode}`);
-        return res.status(200).json({
+        const payload = {
           valid: true,
           client: row.client,
           email: row.email,
           pack: row.pack,
           expires: row.date_expiration,
           server_time: new Date().toISOString()
-        });
+        };
+        const sig = signerReponse(payload);
+        if (sig) payload.signature = sig;
+        return res.status(200).json(payload);
       }
     }
 
